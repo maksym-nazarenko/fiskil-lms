@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"os/signal"
@@ -11,11 +13,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/maxim-nazarenko/fiskil-lms/internal/lms"
-)
-
-const (
-	messageChanBufSize int = 1000
+	"github.com/maxim-nazarenko/fiskil-lms/internal/lms/storage"
 )
 
 type configuration struct {
@@ -50,7 +50,52 @@ func run(args []string) error {
 		return err
 	}
 	// inCh := make(chan lms.Message, messageChanBufSize)
-	dc := lms.NewDataCollector(appLogger)
+	// todo(maksym): populate this config using env variables
+	mysqlStorage, err := storage.NewMysqlStorage(&mysql.Config{
+		User:                 "root",
+		Passwd:               "root",
+		DBName:               "lms",
+		Net:                  "tcp",
+		Addr:                 "127.0.0.1:13306",
+		AllowNativePasswords: true,
+		MultiStatements:      true, // if false, SQL with >1 statement (e.g. create table in migrations) will fail
+	})
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := mysqlStorage.Close(); err != nil {
+			appLogger.Error("could not close database connection: %v", err)
+		}
+	}()
+
+	dbPingCtx, dbPingCancel := context.WithTimeout(appCtx, 10*time.Second)
+	defer dbPingCancel()
+
+	dbUpWaitFunc := func(db *sql.DB) (bool, error) {
+		for {
+			select {
+			case <-dbPingCtx.Done():
+				return false, dbPingCtx.Err()
+			case <-time.After(1 * time.Second):
+				if err := db.PingContext(dbPingCtx); err != nil {
+					appLogger.Info("db ping failed: %v", err)
+					return true, err
+				}
+				return false, nil
+			}
+		}
+	}
+	if err := mysqlStorage.Wait(dbUpWaitFunc); err != nil {
+		return err
+	}
+
+	if err := storage.Migrate("file://migrations/", mysqlStorage.DB()); err != nil {
+		return fmt.Errorf("migraions failed: %v", err)
+	}
+
+	appLogger.Info("migration completed")
+	dc := lms.NewDataCollector(appLogger, lms.NewSliceBuffer())
 	flusher := dc.Flusher()
 
 	wg := sync.WaitGroup{}

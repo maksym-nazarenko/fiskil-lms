@@ -19,6 +19,10 @@ func (dc *dataCollector) WithProcessHooks(hooks ...ProcessHookFunc) *dataCollect
 	return dc
 }
 
+func (dc *dataCollector) Buffer() MessageBuffer {
+	return dc.buffer
+}
+
 func (dc *dataCollector) flush() error {
 	dc.logger.Info("flushing buffer")
 	return nil
@@ -28,12 +32,15 @@ func (dc *dataCollector) processMessage(msg *Message) error {
 	for _, h := range dc.onProcessHooks {
 		h(msg, dc.buffer)
 	}
-	return nil
+
+	_, err := dc.buffer.Append(*msg)
+	return err
 }
 
 // NewDataCollector constructs initialized data collector
-func NewDataCollector(logger Logger) *dataCollector {
+func NewDataCollector(logger Logger, buffer MessageBuffer) *dataCollector {
 	return &dataCollector{
 		logger: logger,
+		buffer: buffer,
 	}
 }

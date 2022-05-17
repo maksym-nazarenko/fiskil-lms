@@ -1,0 +1,19 @@
+---
+
+version: '2.4'
+
+x-common: &common_config
+  restart: "on-failure"
+  logging:
+    driver: json-file
+    options:
+      max-size: "10m"
+      max-file: "2"
+
+services:
+  database:
+    image: mysql:8
+    environment:
+      MYSQL_DATABASE: lms
+      MYSQL_ROOT_PASSWORD: root
+    <<: *common_config
