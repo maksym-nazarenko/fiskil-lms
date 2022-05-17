@@ -1,6 +1,10 @@
 package lms
 
-import "time"
+import (
+	"context"
+	"sync"
+	"time"
+)
 
 // Message represents core message this system works with
 type Message struct {
@@ -19,5 +23,16 @@ type (
 		Error(msg string, args ...interface{})
 	}
 
-	FlushFunc func() error
+	FlushFunc       func() error
+	ProcessHookFunc func(*Message, MessageBuffer) bool
+
+	MessageBuffer interface {
+		sync.Locker
+		// Append adds new message to the buffer and returns updated buffer length
+		Append(Message) (int, error)
+	}
+
+	Querier interface {
+		WithTransaction(ctx context.Context, q Querier) error
+	}
 )

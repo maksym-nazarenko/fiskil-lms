@@ -49,8 +49,8 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	dc := lms.NewDataCollector(appLogger)
 	// inCh := make(chan lms.Message, messageChanBufSize)
+	dc := lms.NewDataCollector(appLogger)
 	flusher := dc.Flusher()
 
 	wg := sync.WaitGroup{}
