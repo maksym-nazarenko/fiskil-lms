@@ -1,18 +1,28 @@
 package lms
 
 import (
-	"context"
 	"sync"
 	"time"
 )
 
-// Message represents core message this system works with
-type Message struct {
-	ServiceName string    `json:"service_name"`
-	Payload     string    `json:"payload"`
-	Severity    string    `json:"severity"`
-	Timestamp   time.Time `json:"timestamp"`
-}
+const (
+	SEVERITY_DEBUG Severity = "debug"
+	SEVERITY_INFO  Severity = "info"
+	SEVERITY_WARN  Severity = "warn"
+	SEVERITY_ERROR Severity = "error"
+	SEVERITY_FATAL Severity = "fatal"
+)
+
+type (
+	Severity string
+	// Message represents core message this system works with
+	Message struct {
+		ServiceName string    `json:"service_name"`
+		Payload     string    `json:"payload"`
+		Severity    Severity  `json:"severity"`
+		Timestamp   time.Time `json:"timestamp"`
+	}
+)
 
 type (
 	Flusher interface {
@@ -33,9 +43,5 @@ type (
 		Append(Message) (int, error)
 		// Len calculates current buffer length
 		Len() int
-	}
-
-	Querier interface {
-		WithTransaction(ctx context.Context, q Querier) error
 	}
 )
