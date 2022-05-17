@@ -28,8 +28,11 @@ type (
 
 	MessageBuffer interface {
 		sync.Locker
+
 		// Append adds new message to the buffer and returns updated buffer length
 		Append(Message) (int, error)
+		// Len calculates current buffer length
+		Len() int
 	}
 
 	Querier interface {

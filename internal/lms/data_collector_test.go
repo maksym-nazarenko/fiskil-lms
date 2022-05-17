@@ -21,7 +21,7 @@ func TestProcessMessage_hoooksCalled(t *testing.T) {
 			return true
 		})
 	}
-	dc := NewDataCollector(newTestLogger(t)).
+	dc := NewDataCollector(newTestLogger(t), NewSliceBuffer()).
 		WithProcessHooks(
 			processHooks...,
 		)
@@ -35,7 +35,11 @@ func TestProcessMessage_hoooksCalled(t *testing.T) {
 			t.Fatalf("error is not expected, but got: %v", err)
 		}
 	}
-
+	expectedBufferLen := msgCount
+	bufferLen := dc.Buffer().Len()
+	if bufferLen != expectedBufferLen {
+		t.Errorf("expected buffer length to be %d got %d", expectedBufferLen, bufferLen)
+	}
 	for i := 1; i <= hooksCount; i++ {
 		for j := 1; j <= msgCount; j++ {
 			invocationID := fmt.Sprintf("hook%d-service-%d", i, j)

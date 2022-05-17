@@ -50,7 +50,7 @@ func run(args []string) error {
 		return err
 	}
 	// inCh := make(chan lms.Message, messageChanBufSize)
-	dc := lms.NewDataCollector(appLogger)
+	dc := lms.NewDataCollector(appLogger, lms.NewSliceBuffer())
 	flusher := dc.Flusher()
 
 	wg := sync.WaitGroup{}
