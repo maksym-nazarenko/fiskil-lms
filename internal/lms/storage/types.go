@@ -12,6 +12,7 @@ type (
 		Payload     string
 		Severity    string
 		Timestamp   time.Time
+		CreatedAt   time.Time
 	}
 
 	// Storage defines interface to be satisfied by concrete storage implementation

@@ -12,6 +12,7 @@ import (
 )
 
 type (
+	WaiterFunc   func(db *sql.DB) (bool, error)
 	mysqlStorage struct {
 		db *sql.DB
 	}
@@ -20,6 +21,25 @@ type (
 		ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 	}
 )
+
+// TimeoutPingWaiter waits until the DB is available or fails on timeout
+var TimeoutPingWaiter func(context.Context, time.Duration) WaiterFunc = func(parxentCtx context.Context, timeout time.Duration) WaiterFunc {
+	return func(db *sql.DB) (bool, error) {
+		ctx, cancel := context.WithTimeout(parxentCtx, timeout)
+		defer cancel()
+		for {
+			select {
+			case <-ctx.Done():
+				return false, ctx.Err()
+			case <-time.After(1 * time.Second):
+				if err := db.PingContext(ctx); err != nil {
+					return true, err
+				}
+				return false, nil
+			}
+		}
+	}
+}
 
 // SaveMessages implements Storage interface
 //
@@ -30,13 +50,13 @@ func (m *mysqlStorage) SaveMessages(ctx context.Context, messages []*Message) er
 		return nil
 	}
 
-	values := strings.Repeat("(?, ?, ?),", len(messages))
+	values := strings.Repeat("(?, ?, ?, ?),", len(messages))
 	values = values[:len(values)-1]
 	args := []interface{}{}
-	stmt := `INSERT INTO service_logs (service_name, payload, severity)
+	stmt := `INSERT INTO service_logs (service_name, payload, severity, timestamp)
 	values ` + values
 	for _, v := range messages {
-		args = append(args, v.ServiceName, v.Payload, v.Severity)
+		args = append(args, v.ServiceName, v.Payload, v.Severity, v.Timestamp)
 	}
 
 	if err := m.WithTransaction(ctx, func(ctx context.Context, q Querier) error {
@@ -50,6 +70,36 @@ func (m *mysqlStorage) SaveMessages(ctx context.Context, messages []*Message) er
 	}
 
 	return nil
+}
+
+func (m *mysqlStorage) ListMessages(ctx context.Context) ([]*Message, error) {
+	stmt := `
+		select service_name, payload, severity, timestamp, created_at
+		from service_logs
+	`
+	rows, err := m.db.QueryContext(ctx, stmt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	messages := []*Message{}
+	for rows.Next() {
+		msg := &Message{}
+		if err := rows.Scan(
+			&msg.ServiceName,
+			&msg.Payload,
+			&msg.Severity,
+			&msg.Timestamp,
+			&msg.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+
+		messages = append(messages, msg)
+	}
+
+	return messages, rows.Err()
 }
 
 // WithTransaction implements Storage interface
@@ -82,13 +132,23 @@ func (m *mysqlStorage) DB() *sql.DB {
 
 }
 
-func (m *mysqlStorage) Wait(f func(db *sql.DB) (bool, error)) error {
+func (m *mysqlStorage) Wait(f WaiterFunc) error {
 	cont, err := f(m.db)
 	for cont {
 		cont, err = f(m.db)
 	}
 
 	return err
+}
+
+// NewMysqlConfig initializes new MySQL connection configuration with sane defaults
+func NewMysqlConfig() *mysql.Config {
+	mysqlConfig := mysql.NewConfig()
+	mysqlConfig.AllowNativePasswords = true
+	mysqlConfig.MultiStatements = true // if false, SQL with >1 statement (e.g. create table in migrations) will fail
+	mysqlConfig.ParseTime = true
+
+	return mysqlConfig
 }
 
 // NewMysqlStorage creates and initializes new MySQL storage instance

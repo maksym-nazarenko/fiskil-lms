@@ -1,3 +1,6 @@
+
+compose = docker compose -p lms -f docker/docker-compose.yml -f docker/docker-compose.dev.yml
+
 help:
 	@sed -n "/^[a-zA-Z0-9_-]*:/ s/:.*//p" < Makefile | sort
 
@@ -5,12 +8,16 @@ test:
 	@go test -race ./...
 
 run:
-	docker compose -p lms -f docker/docker-compose.yml -f docker/docker-compose.dev.yml up -d
+	${compose} up -d
+
+mysql-enter:
+	${compose} exec database mysql -uroot -proot
+
 logs:
-	docker compose -p lms -f docker/docker-compose.yml -f docker/docker-compose.dev.yml logs -f
+	${compose} logs -f
 
 down:
-	docker compose -p lms -f docker/docker-compose.yml -f docker/docker-compose.dev.yml stop
+	${compose} stop
 
 clean:
-	docker compose -p lms -f docker/docker-compose.yml -f docker/docker-compose.dev.yml rm -fs
+	${compose} rm -fs

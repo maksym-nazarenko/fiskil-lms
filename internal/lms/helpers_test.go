@@ -1,6 +1,11 @@
 package lms
 
-import "testing"
+import (
+	"context"
+	"testing"
+
+	"github.com/maxim-nazarenko/fiskil-lms/internal/lms/storage"
+)
 
 type testingLogger struct {
 	t *testing.T
@@ -15,4 +20,9 @@ func (tl *testingLogger) Error(msg string, args ...interface{}) {
 
 func newTestLogger(t *testing.T) *testingLogger {
 	return &testingLogger{t: t}
+}
+
+func TestMysql(t *testing.T) {
+	db := storage.NewTestDatabase(context.Background())
+	db.Close()
 }

@@ -13,7 +13,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/go-sql-driver/mysql"
 	"github.com/maxim-nazarenko/fiskil-lms/internal/lms"
 	"github.com/maxim-nazarenko/fiskil-lms/internal/lms/storage"
 )
@@ -51,15 +50,14 @@ func run(args []string) error {
 	}
 	// inCh := make(chan lms.Message, messageChanBufSize)
 	// todo(maksym): populate this config using env variables
-	mysqlStorage, err := storage.NewMysqlStorage(&mysql.Config{
-		User:                 "root",
-		Passwd:               "root",
-		DBName:               "lms",
-		Net:                  "tcp",
-		Addr:                 "127.0.0.1:13306",
-		AllowNativePasswords: true,
-		MultiStatements:      true, // if false, SQL with >1 statement (e.g. create table in migrations) will fail
-	})
+	mysqlConfig := storage.NewMysqlConfig()
+	mysqlConfig.User = "root"
+	mysqlConfig.Passwd = "root"
+	mysqlConfig.DBName = "lms"
+	mysqlConfig.Net = "tcp"
+	mysqlConfig.Addr = "127.0.0.1:13306"
+
+	mysqlStorage, err := storage.NewMysqlStorage(mysqlConfig)
 	if err != nil {
 		return err
 	}
