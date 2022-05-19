@@ -38,14 +38,15 @@ func (dc *dataCollector) Buffer() MessageBuffer {
 func (dc *dataCollector) ProcessMessage(msg *Message) error {
 	_, err := dc.buffer.Append(*msg)
 	for _, h := range dc.onProcessHooks {
-		h(msg, dc.buffer)
+		if !h(msg, dc.buffer) {
+			break
+		}
 	}
 
 	return err
 }
 
 func (dc *dataCollector) flush(ctx context.Context) error {
-	dc.logger.Info("flushing buffer")
 	if err := dc.storage.SaveMessages(ctx, dc.messagesToStorageMessages(dc.buffer.GetAll())); err != nil {
 		return err
 	}

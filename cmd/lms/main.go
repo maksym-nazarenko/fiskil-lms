@@ -59,7 +59,7 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	// todo(maksym): populate this config using env variables
+
 	mysqlConfig := storage.NewMysqlConfig()
 	mysqlConfig.User = config.db.user
 	mysqlConfig.Passwd = config.db.password
@@ -86,7 +86,7 @@ func run(args []string) error {
 	appLogger.Info("migration completed")
 
 	dc := lms.NewDataCollector(appLogger, lms.NewSliceBuffer(), mysqlStorage)
-	flusher := dc.Flusher()
+	dc.WithProcessHooks(bufLengthHookFlusher(appCtx, config.flushSize, dc.Flusher(), appLogger))
 
 	wg := sync.WaitGroup{}
 
@@ -107,11 +107,9 @@ func run(args []string) error {
 	go func(logger lms.Logger, inCh chan *lms.Message) {
 		defer wg.Done()
 		for message := range inCh {
-			logger.Info("processing message")
 			if err := dc.ProcessMessage(message); err != nil {
 				logger.Error("failed to process message: %v", err)
 			}
-			logger.Info("done")
 		}
 		logger.Info("shutting down")
 	}(consumerLogger, inChan)
@@ -127,7 +125,6 @@ func run(args []string) error {
 				logger.Info("shutting down")
 				return
 			case <-time.After(time.Duration(rand.Intn(5)+1) * time.Second):
-				logger.Info("sending message")
 				n := rand.Intn(3) + 1
 				inCh <- &lms.Message{
 					ServiceName: "service-" + strconv.Itoa(n),
@@ -156,12 +153,12 @@ func run(args []string) error {
 	go func() {
 		defer wg.Done()
 		defer appLogger.Info("stopping interval flusher")
-		if err := timeBasedFlusher(config.flushInterval, flusher, func(err error) {
-			appLogger.Error("flushing failed: %v", err)
-		})(appCtx); err != nil && !errors.Is(err, context.Canceled) {
+
+		if err := timeBasedFlusher(config.flushInterval, dc.Flusher(), appLogger.SubLogger("flushtimer"))(appCtx); err != nil && !errors.Is(err, context.Canceled) {
 			appLogger.Error("interval flusher exited with err: %v", err)
 		}
 	}()
+
 	appLogger.Info("waiting for all background tasks to be completed")
 	wg.Wait()
 
@@ -208,18 +205,32 @@ func parseFlags(args []string) (*configuration, error) {
 	return &config, nil
 }
 
-func timeBasedFlusher(interval time.Duration, flush lms.FlushFunc, errorHandler func(error)) lms.FlushFunc {
+func timeBasedFlusher(interval time.Duration, flush lms.FlushFunc, logger lms.Logger) lms.FlushFunc {
 	return func(ctx context.Context) error {
 		for {
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
 			case <-time.After(interval):
+				logger.Info("flushing data on timer (every %s)", interval)
 				if err := flush(ctx); err != nil {
-					errorHandler(err)
+					logger.Error("flush error: %v", err)
 				}
 			}
 		}
+	}
+}
+
+func bufLengthHookFlusher(ctx context.Context, max int, flusher lms.FlushFunc, logger lms.Logger) lms.ProcessHookFunc {
+	return func(m *lms.Message, mb lms.MessageBuffer) bool {
+		if mb.Len() >= max {
+			logger.Info("bufsize is >= %d, flushing data to storage", max)
+			if err := flusher(ctx); err != nil {
+				logger.Error("flush error: %v", err)
+			}
+		}
+
+		return true
 	}
 }
 
