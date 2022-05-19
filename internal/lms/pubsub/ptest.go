@@ -23,16 +23,23 @@ func StartServer(ctx context.Context, logger lms.Logger) *pstest.Server {
 	return srv
 }
 
-func NewClient(ctx context.Context, serverAddress, project string) (*pubsub.Client, error) {
+func NewClient(ctx context.Context, serverAddress, project string) (*pubsub.Client, func(), error) {
 	conn, err := grpc.Dial(serverAddress, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
-		return nil, err
+		return nil, func() {}, err
 	}
-	defer conn.Close()
+	cancel := func() {
+		conn.Close()
+	}
 
 	client, err := pubsub.NewClient(ctx, project, option.WithGRPCConn(conn))
 	if err != nil {
-		return nil, err
+		return nil, cancel, err
 	}
-	return client, nil
+	cancel = func() {
+		client.Close()
+		conn.Close()
+	}
+
+	return client, cancel, nil
 }

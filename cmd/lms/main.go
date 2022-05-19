@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"math/rand"
 	"os"
 	"os/signal"
+	"strconv"
 	"sync"
 	"syscall"
 	"time"
@@ -86,6 +88,7 @@ func run(args []string) error {
 	go func(logger lms.Logger, inCh chan *lms.Message) {
 		defer wg.Done()
 		for message := range inCh {
+			logger.Info("received message from channel")
 			if err := dc.ProcessMessage(message); err != nil {
 				logger.Error("failed to process message: %v", err)
 			}
@@ -114,25 +117,76 @@ func run(args []string) error {
 	// 		}
 	// 	}
 	// }(producerLogger, inChan)
+
+	// pub/sub implementation
 	pubsubServer := lmspubsub.StartServer(appCtx, appLogger)
 	pubsubProject := "lms"
 	pubsubTopic := config.Pubsub.Topic
-	pubsubClient, err := lmspubsub.NewClient(appCtx, pubsubServer.Addr, pubsubProject)
+	pubsubClient, pubsubClientCancel, err := lmspubsub.NewClient(appCtx, pubsubServer.Addr, pubsubProject)
 	if err != nil {
 		return err
 	}
+	defer pubsubClientCancel()
+
 	pubsubLogger := appLogger.SubLogger("pubsub")
-	pubsubClient.SubscriptionInProject(pubsubTopic, pubsubProject).Receive(
-		appCtx,
-		func(ctx context.Context, m *pubsub.Message) {
-			var message lms.Message
-			if err := json.Unmarshal(m.Data, &message); err != nil {
-				pubsubLogger.Error("failed to parse incoming message: %v", err)
+	topic, err := pubsubClient.CreateTopic(appCtx, pubsubTopic)
+	if err != nil {
+		return err
+	}
+	defer topic.Stop()
+
+	subscription, err := pubsubClient.CreateSubscription(appCtx, "consumer", pubsub.SubscriptionConfig{Topic: topic})
+	if err != nil {
+		return err
+	}
+
+	wg.Add(1)
+	go func(logger lms.Logger) {
+		defer wg.Done()
+		err = subscription.Receive(
+			appCtx,
+			func(ctx context.Context, m *pubsub.Message) {
+				logger.Info("received message from pubsub topic")
+
+				var message lms.Message
+				if err := json.Unmarshal(m.Data, &message); err != nil {
+					logger.Error("failed to parse incoming message: %v", err)
+				}
+				inChan <- &message
+			},
+		)
+		if err != nil {
+			logger.Error(err.Error())
+		}
+	}(pubsubLogger.SubLogger("consumer"))
+
+	wg.Add(1)
+	go func(logger lms.Logger) {
+		defer wg.Done()
+		for {
+			select {
+			case <-appCtx.Done():
+				logger.Info("shutting down")
+				return
+			case <-time.After(time.Duration(rand.Intn(5)+1) * time.Second):
+				n := rand.Intn(3) + 1
+				msg := &lms.Message{
+					ServiceName: "service-" + strconv.Itoa(n),
+					Payload:     "payload here",
+					Severity:    lms.SEVERITY_INFO,
+					Timestamp:   time.Now().UTC(),
+				}
+
+				data, err := json.Marshal(msg)
+				if err != nil {
+					logger.Error("%v", err)
+					continue
+				}
+				_ = topic.Publish(appCtx, &pubsub.Message{Data: data})
+				pubsubLogger.Info("published message")
 			}
-			pubsubLogger.Info("processing message: %v", message)
-			inChan <- &message
-		},
-	)
+		}
+	}(pubsubLogger)
 
 	// time-based flusher periodically flushes data in data collector
 	wg.Add(1)
