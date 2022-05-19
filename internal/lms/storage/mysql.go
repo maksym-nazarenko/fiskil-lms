@@ -23,18 +23,19 @@ type (
 )
 
 // TimeoutPingWaiter waits until the DB is available or fails on timeout
-var TimeoutPingWaiter func(context.Context, time.Duration) WaiterFunc = func(parxentCtx context.Context, timeout time.Duration) WaiterFunc {
+var TimeoutPingWaiter func(context.Context, time.Duration) WaiterFunc = func(parentCtx context.Context, timeout time.Duration) WaiterFunc {
+	ctx, cancel := context.WithTimeout(parentCtx, timeout)
 	return func(db *sql.DB) (bool, error) {
-		ctx, cancel := context.WithTimeout(parxentCtx, timeout)
-		defer cancel()
 		for {
 			select {
 			case <-ctx.Done():
+				cancel()
 				return false, ctx.Err()
 			case <-time.After(1 * time.Second):
 				if err := db.PingContext(ctx); err != nil {
 					return true, err
 				}
+				cancel()
 				return false, nil
 			}
 		}
@@ -100,6 +101,35 @@ func (m *mysqlStorage) ListMessages(ctx context.Context) ([]*Message, error) {
 	}
 
 	return messages, rows.Err()
+}
+
+func (m *mysqlStorage) LogStats(ctx context.Context) ([]*LogStat, error) {
+	stmt := `
+		select service_name, severity, sum(1)
+		from service_logs
+		group by service_name, severity
+	`
+	rows, err := m.db.QueryContext(ctx, stmt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	stats := []*LogStat{}
+	for rows.Next() {
+		stat := &LogStat{}
+		if err := rows.Scan(
+			&stat.ServiceName,
+			&stat.Severity,
+			&stat.Count,
+		); err != nil {
+			return nil, err
+		}
+
+		stats = append(stats, stat)
+	}
+
+	return stats, rows.Err()
 }
 
 // WithTransaction implements Storage interface

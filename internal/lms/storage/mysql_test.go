@@ -10,6 +10,9 @@ import (
 )
 
 func TestSaveMessages(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration tests")
+	}
 	testCtx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
 	defer cancel()
 
@@ -59,4 +62,63 @@ func TestSaveMessages(t *testing.T) {
 			assert.ElementsMatch(t, tc.messages, readMessages)
 		})
 	}
+}
+
+func TestLogStatsMessages(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration tests")
+	}
+	testCtx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
+	defer cancel()
+
+	mysqlStorage := NewTestDatabase(testCtx)
+	expectedResult := map[string]map[string]int{
+		"service-1": {
+			"info":  2,
+			"debug": 5,
+		},
+		"service-2": {
+			"warn":  3,
+			"debug": 12,
+		},
+		"service-3": {
+			"error": 2,
+			"warn":  9,
+			"info":  5,
+		},
+		"service-4": {
+			"fatal": 1,
+			"warn":  2,
+		},
+		"service-5": {
+			"info": 1,
+		},
+	}
+	messagesToSave := []*Message{}
+	expectedLogStats := []*LogStat{}
+	for serviceName, logStats := range expectedResult {
+		for severity, count := range logStats {
+			for i := 0; i < count; i++ {
+				messagesToSave = append(messagesToSave, &Message{
+					ServiceName: serviceName,
+					Severity:    severity,
+					Timestamp:   time.Now().UTC(),
+				})
+			}
+			expectedLogStats = append(expectedLogStats,
+				&LogStat{
+					ServiceName: serviceName,
+					Severity:    severity,
+					Count:       count,
+				})
+		}
+	}
+
+	err := mysqlStorage.SaveMessages(testCtx, messagesToSave)
+	require.NoError(t, err)
+
+	stats, err := mysqlStorage.LogStats(testCtx)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, expectedLogStats, stats)
+
 }

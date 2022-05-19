@@ -1,0 +1,10 @@
+{
+    "go.toolsEnvVars": {
+        "LMS_FLUSH_INTERVAL": "10s",
+        "LMS_FLUSH_SIZE": "3",
+        "LMS_DB_NAME": "lms",
+        "LMS_DB_USER": "root",
+        "LMS_DB_PASSWORD": "root",
+        "LMS_DB_ADDRESS": "127.0.0.1:13306",
+    }
+}

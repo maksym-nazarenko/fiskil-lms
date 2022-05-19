@@ -3,36 +3,23 @@ package main
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
-	"math/rand"
 	"os"
 	"os/signal"
-	"strconv"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"cloud.google.com/go/pubsub"
 	"github.com/maxim-nazarenko/fiskil-lms/internal/lms"
+	"github.com/maxim-nazarenko/fiskil-lms/internal/lms/app"
+	lmspubsub "github.com/maxim-nazarenko/fiskil-lms/internal/lms/pubsub"
 	"github.com/maxim-nazarenko/fiskil-lms/internal/lms/storage"
 	"github.com/maxim-nazarenko/fiskil-lms/internal/lms/utils"
 )
-
-type configuration struct {
-	flushInterval time.Duration
-	flushSize     int
-	db            struct {
-		address  string
-		user     string
-		password string
-		name     string
-	}
-	pubsub struct {
-		topic string
-	}
-}
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
@@ -55,17 +42,17 @@ func run(args []string) error {
 		appLogger.Info("received interruption request, closing the app")
 		cancel()
 	}()
-	config, err := parseFlags(args)
+	config, err := app.BuildConfiguration(args, os.Getenv)
 	if err != nil {
 		return err
 	}
 
 	mysqlConfig := storage.NewMysqlConfig()
-	mysqlConfig.User = config.db.user
-	mysqlConfig.Passwd = config.db.password
-	mysqlConfig.DBName = config.db.name
+	mysqlConfig.User = config.DB.User
+	mysqlConfig.Passwd = config.DB.Password
+	mysqlConfig.DBName = config.DB.Name
 	mysqlConfig.Net = "tcp"
-	mysqlConfig.Addr = config.db.address
+	mysqlConfig.Addr = config.DB.Address
 
 	mysqlStorage, err := storage.NewMysqlStorage(mysqlConfig)
 	if err != nil {
@@ -86,19 +73,11 @@ func run(args []string) error {
 	appLogger.Info("migration completed")
 
 	dc := lms.NewDataCollector(appLogger, lms.NewSliceBuffer(), mysqlStorage)
-	dc.WithProcessHooks(bufLengthHookFlusher(appCtx, config.flushSize, dc.Flusher(), appLogger))
+	dc.WithProcessHooks(bufLengthHookFlusher(appCtx, config.FlushSize, dc.Flusher(), appLogger))
 
 	wg := sync.WaitGroup{}
 
 	// actual work
-	// pubsubServer := lmspubsub.StartServer(appCtx, appLogger)
-	// pubsubProject := "lms"
-	// pubsubTopic := config.pubsub.topic
-	// pubsubClient, err := lmspubsub.NewClient(appCtx, pubsubServer.Addr, pubsubProject)
-	// if err != nil {
-	// 	return err
-	// }
-
 	inChan := make(chan *lms.Message, 100)
 
 	// bridge connects incoming channel of messages and data collector
@@ -115,38 +94,45 @@ func run(args []string) error {
 	}(consumerLogger, inChan)
 
 	// Fake producer sends random data to the channel
-	producerLogger := appLogger.SubLogger("producer")
-	wg.Add(1)
-	go func(logger lms.Logger, inCh chan *lms.Message) {
-		defer wg.Done()
-		for {
-			select {
-			case <-appCtx.Done():
-				logger.Info("shutting down")
-				return
-			case <-time.After(time.Duration(rand.Intn(5)+1) * time.Second):
-				n := rand.Intn(3) + 1
-				inCh <- &lms.Message{
-					ServiceName: "service-" + strconv.Itoa(n),
-					Payload:     "payload here",
-					Severity:    lms.SEVERITY_INFO,
-					Timestamp:   time.Now().UTC(),
-				}
-			}
-		}
-	}(producerLogger, inChan)
-
-	// pubsubLogger := appLogger.SubLogger("consumer")
-	// pubsubClient.SubscriptionInProject(pubsubTopic, pubsubProject).Receive(
-	// 	appCtx,
-	// 	func(ctx context.Context, m *pubsub.Message) {
-	// 		var message lms.Message
-	// 		if err := json.Unmarshal(m.Data, &message); err != nil {
-	// 			pubsubLogger.Error("failed to parse incoming message: %v", err)
+	// producerLogger := appLogger.SubLogger("producer")
+	// wg.Add(1)
+	// go func(logger lms.Logger, inCh chan *lms.Message) {
+	// 	defer wg.Done()
+	// 	for {
+	// 		select {
+	// 		case <-appCtx.Done():
+	// 			logger.Info("shutting down")
+	// 			return
+	// 		case <-time.After(time.Duration(rand.Intn(5)+1) * time.Second):
+	// 			n := rand.Intn(3) + 1
+	// 			inCh <- &lms.Message{
+	// 				ServiceName: "service-" + strconv.Itoa(n),
+	// 				Payload:     "payload here",
+	// 				Severity:    lms.SEVERITY_INFO,
+	// 				Timestamp:   time.Now().UTC(),
+	// 			}
 	// 		}
-	// 		pubsubLogger.Info("processing message: %v", message)
-	// 	},
-	// )
+	// 	}
+	// }(producerLogger, inChan)
+	pubsubServer := lmspubsub.StartServer(appCtx, appLogger)
+	pubsubProject := "lms"
+	pubsubTopic := config.Pubsub.Topic
+	pubsubClient, err := lmspubsub.NewClient(appCtx, pubsubServer.Addr, pubsubProject)
+	if err != nil {
+		return err
+	}
+	pubsubLogger := appLogger.SubLogger("pubsub")
+	pubsubClient.SubscriptionInProject(pubsubTopic, pubsubProject).Receive(
+		appCtx,
+		func(ctx context.Context, m *pubsub.Message) {
+			var message lms.Message
+			if err := json.Unmarshal(m.Data, &message); err != nil {
+				pubsubLogger.Error("failed to parse incoming message: %v", err)
+			}
+			pubsubLogger.Info("processing message: %v", message)
+			inChan <- &message
+		},
+	)
 
 	// time-based flusher periodically flushes data in data collector
 	wg.Add(1)
@@ -154,7 +140,7 @@ func run(args []string) error {
 		defer wg.Done()
 		defer appLogger.Info("stopping interval flusher")
 
-		if err := timeBasedFlusher(config.flushInterval, dc.Flusher(), appLogger.SubLogger("flushtimer"))(appCtx); err != nil && !errors.Is(err, context.Canceled) {
+		if err := timeBasedFlusher(config.FlushInterval, dc.Flusher(), appLogger.SubLogger("flushtimer"))(appCtx); err != nil && !errors.Is(err, context.Canceled) {
 			appLogger.Error("interval flusher exited with err: %v", err)
 		}
 	}()
@@ -163,46 +149,6 @@ func run(args []string) error {
 	wg.Wait()
 
 	return nil
-}
-
-// parseFlags builds configuration of the app based on env
-// todo(maksym): consider using CLI flags if feasible
-// todo(maksym): consider using something like github.com/spf13/viper or build own solution
-func parseFlags(args []string) (*configuration, error) {
-	config := configuration{
-		flushInterval: 1 * time.Minute,
-		flushSize:     5000,
-	}
-
-	flushIntervalStr := os.Getenv("LMS_FLUSH_INTERVAL")
-	if flushIntervalStr != "" {
-		flushInterval, err := time.ParseDuration(flushIntervalStr)
-		if err != nil {
-			return nil, err
-		}
-		config.flushInterval = flushInterval
-	}
-
-	flushSizeStr := os.Getenv("LMS_FLUSH_SIZE")
-	if flushSizeStr != "" {
-		flushSize, err := strconv.Atoi(flushSizeStr)
-		if err != nil {
-			return nil, err
-		}
-		config.flushSize = flushSize
-	}
-
-	config.db.address = os.Getenv("LMS_DB_ADDRESS")
-	config.db.name = os.Getenv("LMS_DB_NAME")
-	config.db.password = os.Getenv("LMS_DB_PASSWORD")
-	config.db.user = os.Getenv("LMS_DB_USER")
-
-	config.pubsub.topic = os.Getenv("LMS_PUBSUB_TOPIC")
-	if strings.TrimSpace(config.pubsub.topic) == "" {
-		config.pubsub.topic = "lms"
-	}
-
-	return &config, nil
 }
 
 func timeBasedFlusher(interval time.Duration, flush lms.FlushFunc, logger lms.Logger) lms.FlushFunc {
