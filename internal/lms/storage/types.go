@@ -19,5 +19,7 @@ type (
 	Storage interface {
 		SaveMessages(ctx context.Context, messages []*Message) error
 		WithTransaction(context.Context, func(context.Context, Querier) error) error
+		Wait(f WaiterFunc) error
+		Close() error
 	}
 )

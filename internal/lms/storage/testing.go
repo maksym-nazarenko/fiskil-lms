@@ -2,10 +2,10 @@ package storage
 
 import (
 	"context"
-	"os"
-	"strings"
 	"sync"
 	"time"
+
+	"github.com/maxim-nazarenko/fiskil-lms/internal/lms/utils"
 )
 
 var once sync.Once
@@ -34,11 +34,8 @@ func NewTestDatabase(ctx context.Context) *mysqlStorage {
 			panic(err)
 		}
 
-		// fixme(maksym): an ugly solution to find working directory
-		// needs to be refactored to something more robust
-		cwd, _ := os.Getwd()
-		cwd = cwd[:strings.LastIndex(cwd, "/fiskil-lms")+len("/fiskil-lms")]
-		if err := Migrate("file://"+cwd+"/migrations", mysqlStorage.DB()); err != nil {
+		projectRoot := utils.ProjectRootDir()
+		if err := Migrate("file://"+projectRoot+"/migrations", mysqlStorage.DB()); err != nil {
 			panic(err)
 		}
 		mysqlStorage, err = NewMysqlStorage(config)

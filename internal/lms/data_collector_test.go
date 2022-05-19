@@ -21,12 +21,12 @@ func TestProcessMessage_hoooksCalled(t *testing.T) {
 			return true
 		})
 	}
-	dc := NewDataCollector(newTestLogger(t), NewSliceBuffer()).
+	dc := NewDataCollector(newTestLogger(t), NewSliceBuffer(), nil).
 		WithProcessHooks(
 			processHooks...,
 		)
 	for i := 1; i <= msgCount; i++ {
-		err := dc.processMessage(&Message{
+		err := dc.ProcessMessage(&Message{
 			ServiceName: "service-" + strconv.Itoa(i),
 			Timestamp:   time.Now().UTC(),
 		})
