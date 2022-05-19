@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-func TestProcessMessage_hoooksCalled(t *testing.T) {
+func TestProcessMessage_hooksCalled(t *testing.T) {
 	const (
 		msgCount   int = 20
 		hooksCount int = 3

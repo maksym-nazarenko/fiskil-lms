@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"testing"
 	"time"
 
 	"github.com/go-sql-driver/mysql"
@@ -19,13 +20,13 @@ var (
 	appConfig   *app.Configuration
 )
 
-func NewTestDatabase(ctx context.Context) *mysqlStorage {
+func NewTestDatabase(ctx context.Context, t *testing.T) *mysqlStorage {
 
 	once.Do(func() {
 		var err error
 		appConfig, err = app.BuildConfiguration([]string{}, os.Getenv)
 		if err != nil {
-			panic(err)
+			t.Fatal(err)
 		}
 		mysqlConfig = NewMysqlConfig()
 		mysqlConfig.User = appConfig.DB.User
@@ -40,31 +41,31 @@ func NewTestDatabase(ctx context.Context) *mysqlStorage {
 
 	mysqlStorage, err := NewMysqlStorage(mysqlConfig)
 	if err != nil {
-		panic(err)
+		t.Fatal(err)
 	}
 	if err := mysqlStorage.Wait(TimeoutPingWaiter(ctx, 10*time.Second)); err != nil {
-		panic(err)
+		t.Fatal(err)
 	}
 
 	_, err = mysqlStorage.DB().ExecContext(ctx, "CREATE DATABASE IF NOT EXISTS `"+dbName+"`")
 	if err != nil {
-		panic(err)
+		t.Fatal(err)
 	}
 
 	mysqlConfig.DBName = dbName
 	mysqlStorage, err = NewMysqlStorage(mysqlConfig)
 	if err != nil {
-		panic(err)
+		t.Fatal(err)
 	}
 
 	projectRoot := utils.ProjectRootDir()
 	if err := Migrate("file://"+projectRoot+"/migrations", mysqlStorage.DB()); err != nil {
-		panic(err)
+		t.Fatal(err)
 	}
 
 	// clean schema
 	if _, err := mysqlStorage.DB().ExecContext(ctx, `delete from service_logs; delete from service_severity;`); err != nil {
-		panic(err)
+		t.Fatal(err)
 	}
 
 	return mysqlStorage

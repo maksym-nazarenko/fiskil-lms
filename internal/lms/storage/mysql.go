@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -24,19 +25,23 @@ type (
 
 // TimeoutPingWaiter waits until the DB is available or fails on timeout
 var TimeoutPingWaiter func(context.Context, time.Duration) WaiterFunc = func(parentCtx context.Context, timeout time.Duration) WaiterFunc {
+	var err error
 	ctx, cancel := context.WithTimeout(parentCtx, timeout)
 	return func(db *sql.DB) (bool, error) {
 		for {
 			select {
 			case <-ctx.Done():
 				cancel()
-				return false, ctx.Err()
-			case <-time.After(1 * time.Second):
-				if err := db.PingContext(ctx); err != nil {
-					return true, err
+				if err != nil {
+					err = errors.New(ctx.Err().Error() + ": " + err.Error())
 				}
-				cancel()
-				return false, nil
+				return false, err
+			case <-time.After(1 * time.Second):
+				if err = db.PingContext(ctx); err == nil {
+					cancel()
+					return false, nil
+				}
+				return true, err
 			}
 		}
 	}

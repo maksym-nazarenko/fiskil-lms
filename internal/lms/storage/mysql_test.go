@@ -16,7 +16,7 @@ func TestSaveMessages(t *testing.T) {
 	testCtx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
 	defer cancel()
 
-	mysqlStorage := NewTestDatabase(testCtx)
+	mysqlStorage := NewTestDatabase(testCtx, t)
 	cases := []struct {
 		name     string
 		messages []*Message
@@ -71,7 +71,7 @@ func TestLogStatsMessages(t *testing.T) {
 	testCtx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
 	defer cancel()
 
-	mysqlStorage := NewTestDatabase(testCtx)
+	mysqlStorage := NewTestDatabase(testCtx, t)
 	expectedResult := map[string]map[string]int{
 		"service-1": {
 			"info":  2,

@@ -5,13 +5,13 @@ help:
 	@sed -n "/^[a-zA-Z0-9_-]*:/ s/:.*#/ -/p" < Makefile | sort
 
 test: # Run short, non-integrational, tests
-	@go test -v -race -short ./...
+	@go test -race -short ./...
 
 test-e2e: # Run full end-to-end tests
-	@go test -v -race ./...
+	${compose} up e2etest
 
 run: # Start project in background
-	${compose} up -d
+	${compose} up -d database
 
 mysql-enter: # Run mysql client inside database container
 	${compose} exec database mysql -uroot -proot
