@@ -16,7 +16,9 @@ func TestSaveMessages(t *testing.T) {
 	testCtx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
 	defer cancel()
 
-	mysqlStorage := NewTestDatabase(testCtx, t)
+	mysqlStorage, dbName := NewTestDatabase(testCtx, t)
+	t.Logf("test DB name: %s", dbName)
+
 	cases := []struct {
 		name     string
 		messages []*Message
@@ -64,14 +66,16 @@ func TestSaveMessages(t *testing.T) {
 	}
 }
 
-func TestLogStatsMessages(t *testing.T) {
+func TestLogStats(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration tests")
 	}
 	testCtx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
 	defer cancel()
 
-	mysqlStorage := NewTestDatabase(testCtx, t)
+	mysqlStorage, dbName := NewTestDatabase(testCtx, t)
+	t.Logf("test DB name: %s", dbName)
+
 	expectedResult := map[string]map[string]int{
 		"service-1": {
 			"info":  2,
@@ -120,5 +124,61 @@ func TestLogStatsMessages(t *testing.T) {
 	stats, err := mysqlStorage.LogStats(testCtx)
 	require.NoError(t, err)
 	assert.ElementsMatch(t, expectedLogStats, stats)
+}
 
+func TestSeverityStats(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration tests")
+	}
+	testCtx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
+	defer cancel()
+
+	mysqlStorage, dbName := NewTestDatabase(testCtx, t)
+	t.Logf("test DB name: %s", dbName)
+
+	expectedResult := map[string]map[string]int{
+		"service-1": {
+			"info":  2,
+			"debug": 5,
+		},
+		"service-2": {
+			"warn":  3,
+			"debug": 12,
+		},
+		"service-3": {
+			"error": 2,
+			"warn":  9,
+			"info":  5,
+		},
+	}
+	messagesToSave := []*Message{}
+	expectedLogStats := []*LogStat{}
+	batchesCount := 2
+	for serviceName, logStats := range expectedResult {
+		for severity, count := range logStats {
+			for i := 0; i < count; i++ {
+				messagesToSave = append(messagesToSave, &Message{
+					ServiceName: serviceName,
+					Severity:    severity,
+					Timestamp:   time.Now().UTC(),
+				})
+			}
+			expectedLogStats = append(expectedLogStats,
+				&LogStat{
+					ServiceName: serviceName,
+					Severity:    severity,
+					Count:       count * batchesCount,
+				})
+		}
+	}
+
+	err := mysqlStorage.SaveMessages(testCtx, messagesToSave)
+	require.NoError(t, err)
+
+	err = mysqlStorage.SaveMessages(testCtx, messagesToSave)
+	require.NoError(t, err)
+
+	stats, err := mysqlStorage.SeverityStats(testCtx)
+	require.NoError(t, err)
+	assert.ElementsMatch(t, expectedLogStats, stats)
 }

@@ -30,6 +30,9 @@ type (
 		// LogStats calculates number of records for (service, severity) group
 		LogStats(ctx context.Context) ([]*LogStat, error)
 
+		// SeverityStats calculates number of records for (service, severity) group by querying report table 'service_severity'
+		SeverityStats(ctx context.Context) ([]*LogStat, error)
+
 		// WithTransaction wraps functions in transaction and rolls it back if function returns error
 		WithTransaction(context.Context, func(context.Context, Querier) error) error
 

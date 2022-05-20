@@ -20,8 +20,7 @@ var (
 	appConfig   *app.Configuration
 )
 
-func NewTestDatabase(ctx context.Context, t *testing.T) *mysqlStorage {
-
+func NewTestDatabase(ctx context.Context, t *testing.T) (*mysqlStorage, string) {
 	once.Do(func() {
 		var err error
 		appConfig, err = app.BuildConfiguration([]string{}, os.Getenv)
@@ -68,7 +67,7 @@ func NewTestDatabase(ctx context.Context, t *testing.T) *mysqlStorage {
 		t.Fatal(err)
 	}
 
-	return mysqlStorage
+	return mysqlStorage, dbName
 }
 
 func tempDBName(n int) string {
