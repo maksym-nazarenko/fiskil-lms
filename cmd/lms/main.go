@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"cloud.google.com/go/pubsub"
+	"cloud.google.com/go/pubsub/pstest"
 	"github.com/maxim-nazarenko/fiskil-lms/internal/lms"
 	"github.com/maxim-nazarenko/fiskil-lms/internal/lms/app"
 	lmspubsub "github.com/maxim-nazarenko/fiskil-lms/internal/lms/pubsub"
@@ -123,12 +124,32 @@ func run(args []string) error {
 	pubsubProject := "lms"
 	pubsubTopic := config.Pubsub.Topic
 	pubsubClient, pubsubClientCancel, err := lmspubsub.NewClient(appCtx, pubsubServer.Addr, pubsubProject)
+	pubsubLogger := appLogger.SubLogger("pubsub")
 	if err != nil {
 		return err
 	}
 	defer pubsubClientCancel()
 
-	pubsubLogger := appLogger.SubLogger("pubsub")
+	wg.Add(1)
+	go func(ctx context.Context, server *pstest.Server, logger lms.Logger) {
+		defer wg.Done()
+		for {
+			select {
+			case <-ctx.Done():
+				logger.Info("shutting down")
+			case <-time.After(2 * time.Second):
+				unacks := 0
+				for _, m := range server.Messages() {
+					if m.Acks == 0 {
+						unacks++
+					}
+				}
+				logger.Info("unacked messages in queue: %d", unacks)
+			}
+		}
+
+	}(appCtx, pubsubServer, pubsubLogger.SubLogger("monitoring"))
+
 	topic, err := pubsubClient.CreateTopic(appCtx, pubsubTopic)
 	if err != nil {
 		return err
@@ -160,6 +181,7 @@ func run(args []string) error {
 		}
 	}(pubsubLogger.SubLogger("consumer"))
 
+	// pubsub producer of random messages
 	wg.Add(1)
 	go func(logger lms.Logger) {
 		defer wg.Done()
@@ -169,14 +191,7 @@ func run(args []string) error {
 				logger.Info("shutting down")
 				return
 			case <-time.After(time.Duration(rand.Intn(5)+1) * time.Second):
-				n := rand.Intn(3) + 1
-				msg := &lms.Message{
-					ServiceName: "service-" + strconv.Itoa(n),
-					Payload:     "payload here",
-					Severity:    lms.SEVERITY_INFO,
-					Timestamp:   time.Now().UTC(),
-				}
-
+				msg := randomLogRecord(3)
 				data, err := json.Marshal(msg)
 				if err != nil {
 					logger.Error("%v", err)
@@ -186,7 +201,7 @@ func run(args []string) error {
 				pubsubLogger.Info("published message")
 			}
 		}
-	}(pubsubLogger)
+	}(pubsubLogger.SubLogger("producer"))
 
 	// time-based flusher periodically flushes data in data collector
 	wg.Add(1)
@@ -199,7 +214,9 @@ func run(args []string) error {
 		}
 	}()
 
-	appLogger.Info("waiting for all background tasks to be completed")
+	appLogger.Info("waiting for all background tasks to be completed:")
+	appLogger.Info("  pubsub server...")
+	pubsubServer.Wait()
 	wg.Wait()
 
 	return nil
@@ -257,4 +274,21 @@ func dbConnect(ctx context.Context, mysqlStorage storage.Storage, appLogger lms.
 	}
 
 	return nil
+}
+
+func randomLogRecord(maxIndex int) *lms.Message {
+	n := rand.Intn(maxIndex) + 1
+	possibleSeverities := []lms.Severity{
+		lms.SEVERITY_DEBUG,
+		lms.SEVERITY_INFO,
+		lms.SEVERITY_WARN,
+		lms.SEVERITY_ERROR,
+		lms.SEVERITY_FATAL,
+	}
+	return &lms.Message{
+		ServiceName: "service-" + strconv.Itoa(n),
+		Payload:     "payload here",
+		Severity:    possibleSeverities[rand.Intn(len(possibleSeverities))],
+		Timestamp:   time.Now().UTC(),
+	}
 }
