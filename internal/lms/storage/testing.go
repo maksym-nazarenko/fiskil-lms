@@ -2,54 +2,80 @@ package storage
 
 import (
 	"context"
+	"math/rand"
 	"os"
 	"strings"
 	"sync"
+	"testing"
 	"time"
+
+	"github.com/go-sql-driver/mysql"
+	"github.com/maxim-nazarenko/fiskil-lms/internal/lms/app"
+	"github.com/maxim-nazarenko/fiskil-lms/internal/lms/utils"
 )
 
-var once sync.Once
+var (
+	once        sync.Once
+	mysqlConfig *mysql.Config
+	appConfig   *app.Configuration
+)
 
-func NewTestDatabase(ctx context.Context) *mysqlStorage {
-	dbName := "lms-test"
-
-	config := NewMysqlConfig()
-	config.DBName = dbName
-	config.User = "root"
-	config.Passwd = "root"
-	config.Net = "tcp"
-	config.Addr = "127.0.0.1:13306"
-
-	mysqlStorage, err := NewMysqlStorage(config)
-	if err != nil {
-		panic(err)
-	}
-	if err := mysqlStorage.Wait(TimeoutPingWaiter(ctx, 10*time.Second)); err != nil {
-		panic(err)
-	}
-
+func NewTestDatabase(ctx context.Context, t *testing.T) (*mysqlStorage, string) {
 	once.Do(func() {
-		_, err = mysqlStorage.DB().ExecContext(ctx, "CREATE DATABASE IF NOT EXISTS `"+dbName+"`")
+		var err error
+		appConfig, err = app.BuildConfiguration([]string{}, os.Getenv)
 		if err != nil {
-			panic(err)
+			t.Fatal(err)
 		}
+		mysqlConfig = NewMysqlConfig()
+		mysqlConfig.User = appConfig.DB.User
+		mysqlConfig.Passwd = appConfig.DB.Password
+		mysqlConfig.DBName = appConfig.DB.Name
+		mysqlConfig.Net = "tcp"
+		mysqlConfig.Addr = appConfig.DB.Address
 
-		// fixme(maksym): an ugly solution to find working directory
-		// needs to be refactored to something more robust
-		cwd, _ := os.Getwd()
-		cwd = cwd[:strings.LastIndex(cwd, "/fiskil-lms")+len("/fiskil-lms")]
-		if err := Migrate("file://"+cwd+"/migrations", mysqlStorage.DB()); err != nil {
-			panic(err)
-		}
-		mysqlStorage, err = NewMysqlStorage(config)
-		if err != nil {
-			panic(err)
-		}
 	})
 
-	if _, err := mysqlStorage.DB().ExecContext(ctx, `delete from service_logs; delete from service_severity;`); err != nil {
-		panic(err)
+	dbName := "lms-test-" + tempDBName(10)
+
+	mysqlStorage, err := NewMysqlStorage(mysqlConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := mysqlStorage.Wait(TimeoutPingWaiter(ctx, 10*time.Second)); err != nil {
+		t.Fatal(err)
 	}
 
-	return mysqlStorage
+	_, err = mysqlStorage.DB().ExecContext(ctx, "CREATE DATABASE IF NOT EXISTS `"+dbName+"`")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	mysqlConfig.DBName = dbName
+	mysqlStorage, err = NewMysqlStorage(mysqlConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	projectRoot := utils.ProjectRootDir()
+	if err := Migrate("file://"+projectRoot+"/migrations", mysqlStorage.DB()); err != nil {
+		t.Fatal(err)
+	}
+
+	// clean schema
+	if _, err := mysqlStorage.DB().ExecContext(ctx, `delete from service_logs; delete from service_severity;`); err != nil {
+		t.Fatal(err)
+	}
+
+	return mysqlStorage, dbName
+}
+
+func tempDBName(n int) string {
+	builder := strings.Builder{}
+	rand.Seed(time.Now().UnixMicro())
+	for i := 0; i < n; i++ {
+		builder.WriteByte(byte(rand.Intn(26) + 'a'))
+	}
+
+	return builder.String()
 }

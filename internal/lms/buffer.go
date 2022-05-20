@@ -33,6 +33,22 @@ func (sb *sliceBuffer) Len() int {
 	return len(sb.buf)
 }
 
+// Clean implements interface
+func (sb *sliceBuffer) Clean() error {
+	sb.mu.Lock()
+	defer sb.mu.Unlock()
+	sb.buf = []*Message{}
+
+	return nil
+}
+
+// GetAll implements interface
+func (sb *sliceBuffer) GetAll() []*Message {
+	sb.mu.Lock()
+	defer sb.mu.Unlock()
+	return sb.buf
+}
+
 // NewSliceBuffer initializes new message buffer with slice as backend
 func NewSliceBuffer() *sliceBuffer {
 	return &sliceBuffer{
