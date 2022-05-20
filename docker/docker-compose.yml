@@ -10,10 +10,44 @@ x-common: &common_config
       max-size: "10m"
       max-file: "2"
 
+x-service-env: &service_env
+  CGO_ENABLED: "0"
+  LMS_FLUSH_INTERVAL: "10s"
+  LMS_FLUSH_SIZE: 3
+  LMS_DB_NAME: lms
+  LMS_DB_USER: root
+  LMS_DB_PASSWORD: root
+  LMS_DB_ADDRESS: database
+
 services:
   database:
     image: mysql:8
     environment:
       MYSQL_DATABASE: lms
       MYSQL_ROOT_PASSWORD: root
+    <<: *common_config
+  e2etest:
+    image: golang:alpine
+    entrypoint: ["/usr/local/go/bin/go"]
+    command: ["run", "cmd/lms/main.go"]
+    stop_signal: SIGINT
+    stop_grace_period: "1m"
+    environment:
+      <<: *service_env
+      LMS_STOP_AFTER: "2m"
+      LMS_FLUSH_INTERVAL: "30s"
+      LMS_FLUSH_SIZE: "10"
+    working_dir: "/code/fiskil-lms"
+    volumes:
+      - ../:/code/fiskil-lms:ro
+    <<: *common_config
+
+  integration:
+    image: golang:alpine
+    command: ["go", "test", "./..."]
+    environment:
+      <<: *service_env
+    working_dir: "/code/fiskil-lms"
+    volumes:
+      - ../:/code/fiskil-lms:ro
     <<: *common_config

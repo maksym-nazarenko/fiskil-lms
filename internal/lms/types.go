@@ -1,6 +1,7 @@
 package lms
 
 import (
+	"context"
 	"sync"
 	"time"
 )
@@ -25,15 +26,15 @@ type (
 )
 
 type (
-	Flusher interface {
-		Flush() error
-	}
 	Logger interface {
 		Info(msg string, args ...interface{})
 		Error(msg string, args ...interface{})
+
+		// SubLogger creates new sublogger with provided instance name
+		SubLogger(name string) Logger
 	}
 
-	FlushFunc       func() error
+	FlushFunc       func(context.Context) error
 	ProcessHookFunc func(*Message, MessageBuffer) bool
 
 	MessageBuffer interface {
@@ -41,7 +42,14 @@ type (
 
 		// Append adds new message to the buffer and returns updated buffer length
 		Append(Message) (int, error)
+
 		// Len calculates current buffer length
 		Len() int
+
+		// GetAll returns all messages in buffer
+		GetAll() []*Message
+
+		// Clean empties the buffer
+		Clean() error
 	}
 )
