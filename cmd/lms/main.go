@@ -50,6 +50,14 @@ func run(args []string) error {
 		return err
 	}
 
+	go func() {
+		select {
+		case <-appCtx.Done():
+		case <-time.After(config.StopAfter):
+			appLogger.Info("LMS_STOP_AFTER (%s) period ended, stopping the app", config.StopAfter)
+			cancel()
+		}
+	}()
 	mysqlConfig := storage.NewMysqlConfig()
 	mysqlConfig.User = config.DB.User
 	mysqlConfig.Passwd = config.DB.Password
@@ -80,22 +88,29 @@ func run(args []string) error {
 
 	wg := sync.WaitGroup{}
 
-	// actual work
-	inChan := make(chan *lms.Message, 100)
+	// channel connects pubsub topic -> data collector
+	inChan := make(chan *lms.Message, config.FlushSize*2)
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		defer appLogger.Info("closed message channel")
+		<-appCtx.Done()
+		close(inChan)
+	}()
 
 	// bridge connects incoming channel of messages and data collector
-	consumerLogger := appLogger.SubLogger("bridge")
 	wg.Add(1)
 	go func(logger lms.Logger, inCh chan *lms.Message) {
 		defer wg.Done()
+		defer logger.Info("shutting down")
 		for message := range inCh {
 			logger.Info("received message from channel")
 			if err := dc.ProcessMessage(message); err != nil {
 				logger.Error("failed to process message: %v", err)
 			}
 		}
-		logger.Info("shutting down")
-	}(consumerLogger, inChan)
+	}(appLogger.SubLogger("bridge"), inChan)
 
 	// Fake producer sends random data to the channel
 	// producerLogger := appLogger.SubLogger("producer")
@@ -120,23 +135,29 @@ func run(args []string) error {
 	// }(producerLogger, inChan)
 
 	// pub/sub implementation
-	pubsubServer := lmspubsub.StartServer(appCtx, appLogger)
+	pubsubLogger := appLogger.SubLogger("pubsub")
+	pubsubServer := lmspubsub.StartServer(appCtx, pubsubLogger.SubLogger("server"))
 	pubsubProject := "lms"
 	pubsubTopic := config.Pubsub.Topic
 	pubsubClient, pubsubClientCancel, err := lmspubsub.NewClient(appCtx, pubsubServer.Addr, pubsubProject)
-	pubsubLogger := appLogger.SubLogger("pubsub")
 	if err != nil {
 		return err
 	}
-	defer pubsubClientCancel()
+	go func(ctx context.Context, logger lms.Logger) {
+		defer pubsubClientCancel()
+		defer logger.Info("shutting down")
+		<-ctx.Done()
+	}(appCtx, pubsubLogger.SubLogger("client"))
 
+	// monitoring goroutine that prints number of not ACKed messages in queue
 	wg.Add(1)
 	go func(ctx context.Context, server *pstest.Server, logger lms.Logger) {
 		defer wg.Done()
+		defer logger.Info("shutting down")
 		for {
 			select {
 			case <-ctx.Done():
-				logger.Info("shutting down")
+				return
 			case <-time.After(2 * time.Second):
 				unacks := 0
 				for _, m := range server.Messages() {
@@ -144,10 +165,9 @@ func run(args []string) error {
 						unacks++
 					}
 				}
-				logger.Info("unacked messages in queue: %d", unacks)
+				logger.Info("not ACKed messages in queue: %d", unacks)
 			}
 		}
-
 	}(appCtx, pubsubServer, pubsubLogger.SubLogger("monitoring"))
 
 	topic, err := pubsubClient.CreateTopic(appCtx, pubsubTopic)
@@ -161,11 +181,61 @@ func run(args []string) error {
 		return err
 	}
 
+	// pubsub producer of random messages
+	producedMessagesStats := []*storage.LogStat{}
+	wg.Add(1)
+	go func(logger lms.Logger, results *[]*storage.LogStat) {
+		defer wg.Done()
+		defer logger.Info("shutting down")
+
+		statsMap := map[string]*storage.LogStat{}
+		for {
+			select {
+			case <-appCtx.Done():
+				return
+			case <-time.After(time.Duration(rand.Intn(5)+1) * time.Second):
+				m := randomLogRecord(3)
+				data, err := json.Marshal(m)
+				if err != nil {
+					logger.Error("%v", err)
+					continue
+				}
+				_ = topic.Publish(appCtx, &pubsub.Message{Data: data})
+				key := m.ServiceName + string(m.Severity)
+				ls, ok := statsMap[key]
+				if !ok {
+					newStat := &storage.LogStat{
+						ServiceName: m.ServiceName,
+						Severity:    string(m.Severity),
+						Count:       1,
+					}
+					*results = append(*results, newStat)
+					statsMap[key] = newStat
+				} else {
+					ls.Count += 1
+				}
+			}
+		}
+	}(pubsubLogger.SubLogger("producer"), &producedMessagesStats)
+
+	// time-based flusher periodically flushes data in data collector
 	wg.Add(1)
 	go func(logger lms.Logger) {
 		defer wg.Done()
-		err = subscription.Receive(
-			appCtx,
+		defer logger.Info("shutting down")
+
+		if err := timeBasedFlusher(config.FlushInterval, dc.Flusher(), appLogger.SubLogger("flushtimer"))(appCtx); err != nil && !errors.Is(err, context.Canceled) {
+			appLogger.Error("interval flusher exited with err: %v", err)
+		}
+	}(appLogger.SubLogger("interval flusher"))
+
+	appLogger.Info("waiting for all background tasks to be completed")
+
+	func(ctx context.Context, subscription *pubsub.Subscription, logger lms.Logger) {
+		defer logger.Info("shutting down")
+
+		err := subscription.Receive(
+			ctx,
 			func(ctx context.Context, m *pubsub.Message) {
 				logger.Info("received message from pubsub topic")
 
@@ -173,51 +243,77 @@ func run(args []string) error {
 				if err := json.Unmarshal(m.Data, &message); err != nil {
 					logger.Error("failed to parse incoming message: %v", err)
 				}
-				inChan <- &message
+				select {
+				case <-ctx.Done():
+				case inChan <- &message:
+				}
 			},
 		)
 		if err != nil {
 			logger.Error(err.Error())
 		}
-	}(pubsubLogger.SubLogger("consumer"))
+	}(appCtx, subscription, pubsubLogger.SubLogger("consumer"))
 
-	// pubsub producer of random messages
-	wg.Add(1)
-	go func(logger lms.Logger) {
-		defer wg.Done()
-		for {
-			select {
-			case <-appCtx.Done():
-				logger.Info("shutting down")
-				return
-			case <-time.After(time.Duration(rand.Intn(5)+1) * time.Second):
-				msg := randomLogRecord(3)
-				data, err := json.Marshal(msg)
-				if err != nil {
-					logger.Error("%v", err)
-					continue
-				}
-				_ = topic.Publish(appCtx, &pubsub.Message{Data: data})
-				pubsubLogger.Info("published message")
-			}
-		}
-	}(pubsubLogger.SubLogger("producer"))
-
-	// time-based flusher periodically flushes data in data collector
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		defer appLogger.Info("stopping interval flusher")
-
-		if err := timeBasedFlusher(config.FlushInterval, dc.Flusher(), appLogger.SubLogger("flushtimer"))(appCtx); err != nil && !errors.Is(err, context.Canceled) {
-			appLogger.Error("interval flusher exited with err: %v", err)
-		}
-	}()
-
-	appLogger.Info("waiting for all background tasks to be completed:")
-	appLogger.Info("  pubsub server...")
-	pubsubServer.Wait()
+	// pubsubServer.Wait()
 	wg.Wait()
+
+	// flush data collector messages before stopping
+	appLogger.Info("flushing storage")
+	flushCtx, flushCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer flushCancel()
+
+	if err := dc.Flusher()(flushCtx); err != nil {
+		appLogger.Error(err.Error())
+	}
+	severityStatsCtx, severityStatsCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer severityStatsCancel()
+	severityStats, err := mysqlStorage.SeverityStats(severityStatsCtx)
+	if err != nil {
+		return err
+	}
+
+	logsStatsCtx, logsStatsCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer logsStatsCancel()
+	logsStats, err := mysqlStorage.SeverityStats(logsStatsCtx)
+	if err != nil {
+		return err
+	}
+
+	appLogger.Info("wait completed")
+	appLogger.Info("Statistics")
+	appLogger.Info("----------")
+	appLogger.Info("Produced messages")
+	producedStatsMap := flattenLogStats(producedMessagesStats)
+	for key, cnt := range producedStatsMap {
+		appLogger.Info(`  %s: %d`, key, cnt)
+	}
+	appLogger.Info("")
+	appLogger.Info("service_logs table stats")
+	logsStatsMap := flattenLogStats(logsStats)
+	for key, cnt := range logsStatsMap {
+		appLogger.Info(`  %s: %d`, key, cnt)
+	}
+
+	appLogger.Info("")
+	appLogger.Info("service_severity table stats")
+	severityStatsMap := flattenLogStats(severityStats)
+	for key, cnt := range severityStatsMap {
+		appLogger.Info(`  %s: %d`, key, cnt)
+	}
+	appLogger.Info("")
+	appLogger.Info("Diffs")
+	for key, cnt := range producedStatsMap {
+		if v, ok := logsStatsMap[key]; !ok {
+			appLogger.Info("  service_logs table is missing '%s'", key)
+		} else if v != cnt {
+			appLogger.Info("  service_logs table reports wrong value for '%s': want %d, got %d", key, cnt, v)
+		}
+		if v, ok := severityStatsMap[key]; !ok {
+			appLogger.Info("  service_severity table is missing '%s'", key)
+		} else if v != cnt {
+			appLogger.Info("  service_severity table reports wrong value for '%s': want %d, got %d", key, cnt, v)
+		}
+	}
 
 	return nil
 }
@@ -227,6 +323,9 @@ func timeBasedFlusher(interval time.Duration, flush lms.FlushFunc, logger lms.Lo
 		for {
 			select {
 			case <-ctx.Done():
+				if err := flush(ctx); err != nil {
+					logger.Error("flush error: %v", err)
+				}
 				return ctx.Err()
 			case <-time.After(interval):
 				logger.Info("flushing data on timer (every %s)", interval)
@@ -291,4 +390,22 @@ func randomLogRecord(maxIndex int) *lms.Message {
 		Severity:    possibleSeverities[rand.Intn(len(possibleSeverities))],
 		Timestamp:   time.Now().UTC(),
 	}
+}
+
+func flattenLogStats(stats []*storage.LogStat) map[string]int {
+	statsMap := map[string]int{}
+	for _, m := range stats {
+		key := m.ServiceName + "," + string(m.Severity)
+		cnt, ok := statsMap[key]
+		newCount := m.Count
+		if newCount < 1 {
+			newCount = 1
+		}
+		if !ok {
+			statsMap[key] = newCount
+		} else {
+			statsMap[key] = cnt + newCount
+		}
+	}
+	return statsMap
 }

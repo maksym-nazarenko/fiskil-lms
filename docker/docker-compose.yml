@@ -28,7 +28,23 @@ services:
     <<: *common_config
   e2etest:
     image: golang:alpine
-    command: ["go", "test", "-v", "./..."]
+    entrypoint: ["/usr/local/go/bin/go"]
+    command: ["run", "cmd/lms/main.go"]
+    stop_signal: SIGINT
+    stop_grace_period: "1m"
+    environment:
+      <<: *service_env
+      LMS_STOP_AFTER: "2m"
+      LMS_FLUSH_INTERVAL: "30s"
+      LMS_FLUSH_SIZE: "10"
+    working_dir: "/code/fiskil-lms"
+    volumes:
+      - ../:/code/fiskil-lms:ro
+    <<: *common_config
+
+  integration:
+    image: golang:alpine
+    command: ["go", "test", "./..."]
     environment:
       <<: *service_env
     working_dir: "/code/fiskil-lms"

@@ -16,8 +16,8 @@ func StartServer(ctx context.Context, logger lms.Logger) *pstest.Server {
 	srv := pstest.NewServer()
 	go func() {
 		defer srv.Close()
+		defer logger.Info("shutting down")
 		<-ctx.Done()
-		logger.Info("stopping pubsub server")
 	}()
 
 	return srv
@@ -29,7 +29,7 @@ func NewClient(ctx context.Context, serverAddress, project string) (*pubsub.Clie
 		return nil, func() {}, err
 	}
 	cancel := func() {
-		conn.Close()
+		defer conn.Close()
 	}
 
 	client, err := pubsub.NewClient(ctx, project, option.WithGRPCConn(conn))
@@ -37,8 +37,8 @@ func NewClient(ctx context.Context, serverAddress, project string) (*pubsub.Clie
 		return nil, cancel, err
 	}
 	cancel = func() {
-		client.Close()
-		conn.Close()
+		defer conn.Close()
+		defer client.Close()
 	}
 
 	return client, cancel, nil

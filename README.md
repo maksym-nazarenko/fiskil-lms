@@ -12,6 +12,7 @@ Configuration is done via environment variables.
 
 |Name|Type|Example|Description|
 |-|-|-|-|
+|LMS_STOP_AFTER|time duration|10s, 1m, 500ms|Stop execution after this period
 |LMS_FLUSH_INTERVAL|time duration|10s, 1m, 500ms|Fixed time period at which DataCollector flushes its message buffer to persistent storage
 |LMS_FLUSH_SIZE|integer|100|The same as LMS_FLUSH_INTERVAL but based on number of messages in internal buffer|
 |LMS_DB_NAME|string|myDB|Database name to use|
@@ -34,8 +35,11 @@ mysql-enter - Run mysql client inside database container
 run - Start project in background
 test - Run short, non-integrational, tests
 test-e2e - Run full end-to-end tests
+test-integration - Run all tests, including integration
 ```
 
 ## Known issues and trade-offs
 
 1. The storage layer could be abstracted better. I assume, changing MySQL to something else will require refactoring.
+1. ACKs are not sent after processing the message from pubsub topic
+1. `make clean` must be run before e2e tests manually

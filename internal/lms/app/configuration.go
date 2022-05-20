@@ -10,6 +10,7 @@ import (
 type Configuration struct {
 	FlushInterval time.Duration
 	FlushSize     int
+	StopAfter     time.Duration
 	DB            struct {
 		Address  string
 		User     string
@@ -37,6 +38,14 @@ func BuildConfiguration(args []string, envGetter EnvGetterFunc) (*Configuration,
 			return nil, err
 		}
 		config.FlushInterval = flushInterval
+	}
+	stopAfterStr := envGetter("LMS_STOP_AFTER")
+	if stopAfterStr != "" {
+		stopAfter, err := time.ParseDuration(stopAfterStr)
+		if err != nil {
+			return nil, err
+		}
+		config.StopAfter = stopAfter
 	}
 
 	flushSizeStr := envGetter("LMS_FLUSH_SIZE")

@@ -10,6 +10,9 @@ test: # Run short, non-integrational, tests
 test-e2e: # Run full end-to-end tests
 	${compose} up e2etest
 
+test-integration: # Run all tests, including integration
+	${compose} up integration
+
 run: # Start project in background
 	${compose} up -d database
 
