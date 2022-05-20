@@ -47,5 +47,4 @@ It will run MySQL bound to `127.0.0.1:13306` by default (see [docker-compose.dev
 ## Known issues and trade-offs
 
 1. The storage layer could be abstracted better. I assume, changing MySQL to something else will require refactoring.
-1. ACKs are not sent after processing the message from pubsub topic
 1. `make clean` must be run before e2e tests manually

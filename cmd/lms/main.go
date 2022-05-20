@@ -24,6 +24,44 @@ import (
 	"github.com/maxim-nazarenko/fiskil-lms/internal/lms/utils"
 )
 
+// it was added last second, so doesn't look really nice
+type messagesWrapper struct {
+	pubsubMessages []*pubsub.Message
+	mu             sync.Mutex
+}
+
+func newMessagesWrapper() *messagesWrapper {
+	return &messagesWrapper{
+		pubsubMessages: []*pubsub.Message{},
+		mu:             sync.Mutex{},
+	}
+}
+
+func (mw *messagesWrapper) Append(m *pubsub.Message) int {
+	mw.mu.Lock()
+	defer mw.mu.Unlock()
+	mw.pubsubMessages = append(mw.pubsubMessages, m)
+
+	return len(mw.pubsubMessages)
+}
+
+func (mw *messagesWrapper) Clean() {
+	mw.mu.Lock()
+	defer mw.mu.Unlock()
+
+	mw.pubsubMessages = []*pubsub.Message{}
+}
+
+func (mw *messagesWrapper) SendAcksAll() {
+	mw.mu.Lock()
+	defer mw.mu.Unlock()
+
+	for _, m := range mw.pubsubMessages {
+		m.Ack()
+	}
+	mw.pubsubMessages = []*pubsub.Message{}
+}
+
 func main() {
 	if err := run(os.Args[1:]); err != nil {
 		log.Fatal(err)
@@ -84,7 +122,17 @@ func run(args []string) error {
 	appLogger.Info("migration completed")
 
 	dc := lms.NewDataCollector(appLogger, lms.NewSliceBuffer(), mysqlStorage)
-	dc.WithProcessHooks(bufLengthHookFlusher(appCtx, config.FlushSize, dc.Flusher(), appLogger))
+
+	mw := newMessagesWrapper()
+	var flusher lms.FlushFunc = func(ctx context.Context) error {
+		if err := dc.Flusher()(ctx); err != nil {
+			return err
+		}
+		mw.SendAcksAll()
+
+		return nil
+	}
+	dc.WithProcessHooks(bufLengthHookFlusher(appCtx, config.FlushSize, flusher, appLogger))
 
 	wg := sync.WaitGroup{}
 
@@ -224,7 +272,7 @@ func run(args []string) error {
 		defer wg.Done()
 		defer logger.Info("shutting down")
 
-		if err := timeBasedFlusher(config.FlushInterval, dc.Flusher(), appLogger.SubLogger("flushtimer"))(appCtx); err != nil && !errors.Is(err, context.Canceled) {
+		if err := timeBasedFlusher(config.FlushInterval, flusher, appLogger.SubLogger("flushtimer"))(appCtx); err != nil && !errors.Is(err, context.Canceled) {
 			appLogger.Error("interval flusher exited with err: %v", err)
 		}
 	}(appLogger.SubLogger("interval flusher"))
@@ -246,6 +294,7 @@ func run(args []string) error {
 				select {
 				case <-ctx.Done():
 				case inChan <- &message:
+					mw.Append(m)
 				}
 			},
 		)
@@ -261,7 +310,7 @@ func run(args []string) error {
 	flushCtx, flushCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer flushCancel()
 
-	if err := dc.Flusher()(flushCtx); err != nil {
+	if err := flusher(flushCtx); err != nil {
 		appLogger.Error(err.Error())
 	}
 	severityStatsCtx, severityStatsCancel := context.WithTimeout(context.Background(), 5*time.Second)
