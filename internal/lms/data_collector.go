@@ -2,6 +2,7 @@ package lms
 
 import (
 	"context"
+	"sync"
 
 	"github.com/maxim-nazarenko/fiskil-lms/internal/lms/storage"
 )
@@ -11,6 +12,9 @@ type dataCollector struct {
 	onProcessHooks []ProcessHookFunc
 	buffer         MessageBuffer
 	storage        storage.Storage
+
+	// fmu guards calls to flush()
+	fmu sync.Mutex
 }
 
 // NewDataCollector constructs initialized data collector
@@ -19,6 +23,7 @@ func NewDataCollector(logger Logger, buffer MessageBuffer, storage storage.Stora
 		logger:  logger,
 		buffer:  buffer,
 		storage: storage,
+		fmu:     sync.Mutex{},
 	}
 }
 
@@ -42,12 +47,14 @@ func (dc *dataCollector) ProcessMessage(msg *Message) error {
 			break
 		}
 	}
-
 	return err
 }
 
 func (dc *dataCollector) flush(ctx context.Context) error {
-	if err := dc.storage.SaveMessages(ctx, dc.messagesToStorageMessages(dc.buffer.GetAll())); err != nil {
+	dc.fmu.Lock()
+	defer dc.fmu.Unlock()
+	messages := dc.messagesToStorageMessages(dc.buffer.GetAll())
+	if err := dc.storage.SaveMessages(ctx, messages); err != nil {
 		return err
 	}
 	if err := dc.buffer.Clean(); err != nil {

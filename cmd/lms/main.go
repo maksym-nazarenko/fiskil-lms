@@ -254,11 +254,10 @@ func run(args []string) error {
 		}
 	}(appCtx, subscription, pubsubLogger.SubLogger("consumer"))
 
-	// pubsubServer.Wait()
+	pubsubServer.Wait()
 	wg.Wait()
 
 	// flush data collector messages before stopping
-	appLogger.Info("flushing storage")
 	flushCtx, flushCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer flushCancel()
 
@@ -279,14 +278,17 @@ func run(args []string) error {
 		return err
 	}
 
-	appLogger.Info("wait completed")
 	appLogger.Info("Statistics")
 	appLogger.Info("----------")
 	appLogger.Info("Produced messages")
 	producedStatsMap := flattenLogStats(producedMessagesStats)
+	totalProduced := 0
 	for key, cnt := range producedStatsMap {
 		appLogger.Info(`  %s: %d`, key, cnt)
+		totalProduced += cnt
 	}
+	appLogger.Info("Total: %d", totalProduced)
+
 	appLogger.Info("")
 	appLogger.Info("service_logs table stats")
 	logsStatsMap := flattenLogStats(logsStats)
@@ -302,17 +304,25 @@ func run(args []string) error {
 	}
 	appLogger.Info("")
 	appLogger.Info("Diffs")
+	noDiffs := true
 	for key, cnt := range producedStatsMap {
 		if v, ok := logsStatsMap[key]; !ok {
 			appLogger.Info("  service_logs table is missing '%s'", key)
+			noDiffs = false
 		} else if v != cnt {
 			appLogger.Info("  service_logs table reports wrong value for '%s': want %d, got %d", key, cnt, v)
+			noDiffs = false
 		}
 		if v, ok := severityStatsMap[key]; !ok {
 			appLogger.Info("  service_severity table is missing '%s'", key)
+			noDiffs = false
 		} else if v != cnt {
 			appLogger.Info("  service_severity table reports wrong value for '%s': want %d, got %d", key, cnt, v)
+			noDiffs = false
 		}
+	}
+	if noDiffs {
+		appLogger.Info("  all good, everything is in sync")
 	}
 
 	return nil

@@ -5,7 +5,7 @@ import (
 )
 
 type sliceBuffer struct {
-	mu  sync.Mutex
+	mu  sync.RWMutex
 	buf []*Message
 }
 
@@ -27,8 +27,8 @@ func (sb *sliceBuffer) Append(msg Message) (int, error) {
 }
 
 func (sb *sliceBuffer) Len() int {
-	sb.mu.Lock()
-	defer sb.mu.Unlock()
+	sb.mu.RLock()
+	defer sb.mu.RUnlock()
 
 	return len(sb.buf)
 }
@@ -44,15 +44,15 @@ func (sb *sliceBuffer) Clean() error {
 
 // GetAll implements interface
 func (sb *sliceBuffer) GetAll() []*Message {
-	sb.mu.Lock()
-	defer sb.mu.Unlock()
+	sb.mu.RLock()
+	defer sb.mu.RUnlock()
 	return sb.buf
 }
 
 // NewSliceBuffer initializes new message buffer with slice as backend
 func NewSliceBuffer() *sliceBuffer {
 	return &sliceBuffer{
-		mu:  sync.Mutex{},
+		mu:  sync.RWMutex{},
 		buf: []*Message{},
 	}
 }

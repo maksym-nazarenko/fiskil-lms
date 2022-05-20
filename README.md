@@ -12,7 +12,7 @@ Configuration is done via environment variables.
 
 |Name|Type|Example|Description|
 |-|-|-|-|
-|LMS_STOP_AFTER|time duration|10s, 1m, 500ms|Stop execution after this period
+|LMS_STOP_AFTER|time duration|10s, 1m, 500ms|Stop execution after this period (used to auto stop e2e test)
 |LMS_FLUSH_INTERVAL|time duration|10s, 1m, 500ms|Fixed time period at which DataCollector flushes its message buffer to persistent storage
 |LMS_FLUSH_SIZE|integer|100|The same as LMS_FLUSH_INTERVAL but based on number of messages in internal buffer|
 |LMS_DB_NAME|string|myDB|Database name to use|
@@ -37,6 +37,12 @@ test - Run short, non-integrational, tests
 test-e2e - Run full end-to-end tests
 test-integration - Run all tests, including integration
 ```
+
+If you prefer running/debugging code from host, you have to run at least database container using:
+```sh
+$ make run
+```
+It will run MySQL bound to `127.0.0.1:13306` by default (see [docker-compose.dev.yml](./docker/docker-compose.dev.yml))
 
 ## Known issues and trade-offs
 

@@ -34,7 +34,7 @@ services:
     stop_grace_period: "1m"
     environment:
       <<: *service_env
-      LMS_STOP_AFTER: "2m"
+      LMS_STOP_AFTER: "2m30s"
       LMS_FLUSH_INTERVAL: "30s"
       LMS_FLUSH_SIZE: "10"
     working_dir: "/code/fiskil-lms"
